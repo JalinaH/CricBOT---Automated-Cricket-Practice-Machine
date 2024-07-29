@@ -47,8 +47,7 @@ Servo mainServo;
 
 HX711 scale;
 
-const float SINGLE_BALL_WEIGHT = 60.0; 
-const float BUCKET_WEIGHT = 340.0; 
+const float WEIGHT_THRESHOLD = 400.0;
 const float CALIBRATION_FACTOR = -330.3333333333333333333333;
 const unsigned long INPUT_TIMEOUT = 30000; // 30 seconds timeout for user input
 
@@ -90,29 +89,6 @@ void setup() {
   lcd.setCursor(0, 1);
   lcd.print("Ready");
 
-  Serial1.println("PING");
-  unsigned long startTime = millis();
-  while (Serial1.available()) {
-    char c = Serial1.read();
-    if (c == '\n') {
-      processCommand(inputBuffer);
-      inputBuffer = "";
-    } else {
-      inputBuffer += c;
-    }
-  }
-
-  char key = keypad.getKey();
-  if (key == '*') {
-    manualStartMachine();
-  } else if (key == '#') {
-    stopMachine();
-    displayResultAndWait(0, "Machine stopped");
-  }
-
-  checkAndPrintWeight();
-  
-  delay(100);
 }
 
 void loop() {
@@ -125,8 +101,6 @@ void loop() {
     displayResultAndWait(0, "Machine stopped");
   }
 
-  checkAndPrintWeight();
-  
   while (Serial1.available()) {
     char c = Serial1.read();
     if (c == '\n') {
@@ -270,7 +244,7 @@ void startMachine(int type, int numBalls) {
 
   // Reset the main servo to its initial position (0 degrees) if it was moved
   if (type == 2) {
-    moveMainServo(90);
+    moveMainServo(0);
   }
 
   stopMachine();
@@ -295,7 +269,7 @@ void inswing() {
 }
 
 void outswing() {
-  setMotorSpeedRaw(75, 220);
+  setMotorSpeedRaw(190, 220);
 }
 
 void setMotorSpeedRaw(int speed1, int speed2) {
@@ -336,11 +310,27 @@ void displayError(String message) {
 }
 
 bool bowlBall(int type) {
-  ballServo.write(50);
-  delay(500);
-  ballServo.write(180);
-  delay(500);
-  ballServo.write(90);
+  for (int pos = 0; pos <= 80; pos += 5) {
+    ballServo.write(pos);
+    delay(15);
+  }
+
+  // Return ball servo to starting position
+  ballServo.write(0);
+  delay(1);
+  
+  // Wait for the ball to be detected by the proximity sensor
+  unsigned long startTime = millis();
+  while (digitalRead(proximitySensorPin) == HIGH) {
+    if (millis() - startTime > 5000) {  // 5 seconds timeout
+      Serial.println("DEBUG: Ball stuck, stopping machine");
+      return false;  // Ball stuck
+    }
+    delay(10);  // Small delay to prevent CPU hogging
+  }
+
+  Serial1.println("INFO:Ball bowled");
+  Serial.println("DEBUG: Ball bowled");
   return true;
 }
 
@@ -351,7 +341,7 @@ void moveMainServo(int angle) {
 
 void stopMachine() {
   stopMotors();
-  ballServo.write(90);
+  ballServo.write(0);
 }
 
 void stopMotors() {
@@ -378,7 +368,7 @@ bool safetyCheck() {
   duration = pulseIn(echoPin, HIGH);
   distance = duration * 0.034 / 2;
 
-  if (distance <= 30) {
+  if (distance <= 200) {
     digitalWrite(buzzerPin, HIGH);
     digitalWrite(ledPin, HIGH);
     delay(100);
@@ -394,8 +384,7 @@ bool safetyCheck() {
 
 bool checkBalls() {
   float currentWeight = scale.get_units();
-  int ballsRemaining = (currentWeight - BUCKET_WEIGHT) / SINGLE_BALL_WEIGHT;
-  return ballsRemaining > 0;
+  return currentWeight >= WEIGHT_THRESHOLD;
 }
 
 char getKeyWithTimeout(char validMin, char validMax) {
@@ -436,19 +425,6 @@ void displayConnectionStatus(bool connected) {
   } else {
     lcd.print("Disconnected");
   }
-  delay(1000);
-  displayDefaultMessage();
-}
-
-void checkAndPrintWeight() {
-  float weight = scale.get_units();
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Weight: ");
-  lcd.print(weight, 2);
-  lcd.setCursor(0, 1);
-  lcd.print("Balls: ");
-  lcd.print((weight - BUCKET_WEIGHT) / SINGLE_BALL_WEIGHT, 0);
   delay(1000);
   displayDefaultMessage();
 }
